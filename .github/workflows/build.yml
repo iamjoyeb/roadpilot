@@ -1,0 +1,419 @@
+# RoadPilot CI — push to main builds Windows (+MSI) and Android artifacts.
+# Design: docs/CI_CD.md (this file must satisfy that specification).
+#
+# Readiness behavior: a preflight job checks for project.godot / export_presets.cfg /
+# scripts / tests and reports what is present. Builds activate automatically once the
+# Godot project is scaffolded; until then the workflow stays green and explains in the
+# job summary why builds were skipped.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+env:
+  GODOT_VERSION: "4.7.2"
+  GDTOOLKIT_VERSION: "4.5.0"
+  WIX_VERSION: "5.0.2"
+  GODOT_RELEASES: "https://github.com/godotengine/godot/releases/download/4.7.2-stable"
+  # Export preset names are a contract with export_presets.cfg (docs/CI_CD.md §3):
+  PRESET_WINDOWS: "Windows Desktop"
+  PRESET_ANDROID: "Android"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Stage 0 — preflight: what exists yet?
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      has_project: ${{ steps.check.outputs.has_project }}
+      has_presets: ${{ steps.check.outputs.has_presets }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check repository readiness
+        id: check
+        run: |
+          has_project="false"; has_presets="false"; has_scripts="false"; has_tests="false"
+          [ -f project.godot ] && has_project="true"
+          [ -f export_presets.cfg ] && has_presets="true"
+          if find src -name '*.gd' -print -quit 2>/dev/null | grep -q .; then has_scripts="true"; fi
+          if find tests -name '*.gd' -print -quit 2>/dev/null | grep -q .; then has_tests="true"; fi
+          echo "has_project=$has_project" >> "$GITHUB_OUTPUT"
+          echo "has_presets=$has_presets" >> "$GITHUB_OUTPUT"
+          {
+            echo "### CI preflight"
+            echo "| Prerequisite | State |"
+            echo "|---|---|"
+            echo "| project.godot | $has_project |"
+            echo "| export_presets.cfg | $has_presets |"
+            echo "| scripts (src/*.gd) | $has_scripts |"
+            echo "| tests (tests/*.gd) | $has_tests |"
+            echo ""
+            if [ "$has_project" = "true" ] && [ "$has_presets" = "true" ]; then
+              echo "Ready — Windows and Android builds will run."
+            else
+              echo "Docs/scaffold phase — build jobs are skipped until \`project.godot\` and"
+              echo "\`export_presets.cfg\` exist. See docs/CI_CD.md (bring-up order)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Stage 1 — quality gates: lint + headless tests
+  # ---------------------------------------------------------------------------
+  quality:
+    name: lint & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install gdtoolkit (gdlint, gdformat)
+        run: pip install "gdtoolkit==$GDTOOLKIT_VERSION"
+
+      - name: Lint (gdlint)
+        run: |
+          targets=()
+          [ -d src ] && targets+=(src)
+          [ -d tests ] && targets+=(tests)
+          if [ ${#targets[@]} -eq 0 ]; then
+            echo "::notice::No GDScript directories yet - gdlint skipped (docs-only repository)"
+          else
+            gdlint "${targets[@]}"
+          fi
+
+      - name: Format check (gdformat)
+        run: |
+          targets=()
+          [ -d src ] && targets+=(src)
+          [ -d tests ] && targets+=(tests)
+          if [ ${#targets[@]} -eq 0 ]; then
+            echo "::notice::No GDScript directories yet - gdformat check skipped"
+          else
+            gdformat --check "${targets[@]}"
+          fi
+
+      - name: Cache Godot editor (for headless tests)
+        uses: actions/cache@v4
+        with:
+          path: build-tools/godot
+          key: godot-${{ env.GODOT_VERSION }}-editor-${{ runner.os }}
+
+      - name: Run headless tests (GUT)
+        run: |
+          if [ ! -f project.godot ] || [ ! -f addons/gut/gut_cmdln.gd ]; then
+            echo "::notice::project.godot / GUT not present yet - tests skipped (docs/CI_CD.md bring-up step 2)"
+            exit 0
+          fi
+          mkdir -p build-tools/godot
+          GODOT_BIN="build-tools/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          if [ ! -x "$GODOT_BIN" ]; then
+            curl -fsSL --retry 3 -o /tmp/godot-editor.zip \
+              "$GODOT_RELEASES/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -q /tmp/godot-editor.zip -d build-tools/godot
+            chmod +x "$GODOT_BIN"
+          fi
+          "$GODOT_BIN" --headless --path . --import \
+            || echo "::warning::import exited non-zero; continuing (export/tests will surface real errors)"
+          "$GODOT_BIN" --headless --path . \
+            -s addons/gut/gut_cmdln.gd -gdir=res://tests -ginclude_subdirs -gexit
+
+  # ---------------------------------------------------------------------------
+  # Stage 2A — Windows build (+ Stage 3: MSI packaging)
+  # ---------------------------------------------------------------------------
+  build_windows:
+    name: windows + msi
+    needs: preflight
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.preflight.outputs.has_project == 'true' &&
+      needs.preflight.outputs.has_presets == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build identity
+        run: |
+          "SHORT_SHA=$($env:GITHUB_SHA.Substring(0,7))" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Cache Godot editor
+        uses: actions/cache@v4
+        with:
+          path: build-tools/godot
+          key: godot-${{ env.GODOT_VERSION }}-editor-${{ runner.os }}
+
+      - name: Cache export templates
+        uses: actions/cache@v4
+        with:
+          path: build-tools/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-templates-${{ runner.os }}
+
+      - name: Download Godot editor + export templates (cache miss)
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path build-tools/godot)) { New-Item -ItemType Directory -Force build-tools/godot | Out-Null }
+          $exe = "build-tools\godot\Godot_v$env:GODOT_VERSION-stable_win64.exe"
+          if (-not (Test-Path $exe)) {
+            curl.exe -fsSL --retry 3 -o build-tools\godot-editor.zip "$env:GODOT_RELEASES/Godot_v$env:GODOT_VERSION-stable_win64.exe.zip"
+            tar -xf build-tools\godot-editor.zip -C build-tools\godot
+          }
+          if (-not (Test-Path build-tools/export_templates) -or @(Get-ChildItem -Force build-tools/export_templates -ErrorAction SilentlyContinue).Count -eq 0) {
+            New-Item -ItemType Directory -Force build-tools/export_templates | Out-Null
+            curl.exe -fsSL --retry 3 -o build-tools\templates.tpz "$env:GODOT_RELEASES/Godot_v$env:GODOT_VERSION-stable_export_templates.tpz"
+            Copy-Item build-tools\templates.tpz build-tools\templates.zip
+            Expand-Archive build-tools\templates.zip -DestinationPath build-tools\tp -Force
+            Copy-Item -Recurse -Force build-tools\tp\templates\* build-tools\export_templates\
+          }
+
+      - name: Stage templates where Godot expects them
+        run: |
+          $tdir = "$env:APPDATA\Godot\export_templates\$env:GODOT_VERSION.stable"
+          if (-not (Test-Path $tdir) -or @(Get-ChildItem -Force $tdir -ErrorAction SilentlyContinue).Count -eq 0) {
+            New-Item -ItemType Directory -Force $tdir | Out-Null
+            Copy-Item -Recurse -Force build-tools\export_templates\* $tdir\
+          }
+
+      - name: Import project + export Windows
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build/windows | Out-Null
+          $exe = "build-tools\godot\Godot_v$env:GODOT_VERSION-stable_win64.exe"
+          & $exe --headless --path . --import
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::import exited $LASTEXITCODE (continuing)" }
+          & $exe --headless --path . --export-release "$env:PRESET_WINDOWS" build/windows/RoadPilot.exe
+          if ($LASTEXITCODE -ne 0) { throw "Godot Windows export failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path build/windows/RoadPilot.exe)) { throw "RoadPilot.exe missing after export" }
+          if (-not (Test-Path build/windows/RoadPilot.pck)) { Write-Host "::warning::RoadPilot.pck not found (check export mode)" }
+
+      - name: Write build-info.json
+        run: |
+          $info = [ordered]@{
+            project      = "RoadPilot"
+            version      = "0.0.$env:GITHUB_RUN_NUMBER"
+            commit       = $env:GITHUB_SHA
+            short_sha    = $env:SHORT_SHA
+            branch       = $env:GITHUB_REF_NAME
+            build_number = [int]$env:GITHUB_RUN_NUMBER
+            run_id       = [string]$env:GITHUB_RUN_ID
+            built_at     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            godot_version = $env:GODOT_VERSION
+            target       = "windows-x64"
+          }
+          $info | ConvertTo-Json | Set-Content build/windows/build-info.json -Encoding utf8
+          New-Item -ItemType Directory -Force build/installer | Out-Null
+          Copy-Item build/windows/build-info.json build/installer/build-info.json
+
+      - name: Package MSI (WiX)
+        run: |
+          $ErrorActionPreference = "Stop"
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          $wixCmd = Get-Command wix -ErrorAction SilentlyContinue
+          if ($wixCmd) { $wix = $wixCmd.Source } else { $wix = "$env:USERPROFILE\.dotnet\tools\wix.exe" }
+          # UpgradeCode is the stable product identity of RoadPilot MSIs (do not change).
+          $upgradeCode = "9F4E7A2B-1C58-4D3E-B6A0-7E2D9C3F5A18"
+          $version = "0.0.$env:GITHUB_RUN_NUMBER"
+          $wxs = @"
+          <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+            <Package Name="RoadPilot" Version="$version" Manufacturer="RoadPilot"
+                     UpgradeCode="$upgradeCode" Scope="perMachine">
+              <MediaTemplate EmbedCab="yes" />
+              <StandardDirectory Id="ProgramFiles64Folder">
+                <Directory Id="INSTALLFOLDER" Name="RoadPilot" />
+              </StandardDirectory>
+              <Feature Id="Main" Title="RoadPilot" Level="1">
+                <ComponentGroupRef Id="RoadPilotFiles" />
+              </Feature>
+            </Package>
+            <Fragment>
+              <ComponentGroup Id="RoadPilotFiles" Directory="INSTALLFOLDER">
+                <Files Include="build\windows\**" />
+              </ComponentGroup>
+            </Fragment>
+          </Wix>
+          "@
+          Set-Content build/installer/RoadPilot.wxs -Value $wxs -Encoding utf8
+          $msi = "RoadPilot-$version.msi"
+          & $wix build build/installer/RoadPilot.wxs -o "build/installer/$msi" -arch x64
+          if ($LASTEXITCODE -ne 0) { throw "wix build failed (exit $LASTEXITCODE)" }
+          if (-not (Test-Path "build/installer/$msi")) { throw "MSI missing after wix build" }
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadpilot-windows-x64-${{ env.SHORT_SHA }}-${{ github.run_number }}
+          path: build/windows/
+          retention-days: 30
+
+      - name: Upload MSI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadpilot-msi-x64-${{ env.SHORT_SHA }}-${{ github.run_number }}
+          path: build/installer/*
+          retention-days: 30
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadpilot-windows-logs-${{ env.SHORT_SHA }}-${{ github.run_number }}
+          path: "*.log"
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Stage 2B — Android APK
+  # ---------------------------------------------------------------------------
+  build_android:
+    name: android apk
+    needs: preflight
+    if: >-
+      github.event_name != 'pull_request' &&
+      needs.preflight.outputs.has_project == 'true' &&
+      needs.preflight.outputs.has_presets == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build identity
+        run: echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" \
+            "platforms;android-34" "build-tools;34.0.0" \
+            "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Cache Godot editor
+        uses: actions/cache@v4
+        with:
+          path: build-tools/godot
+          key: godot-${{ env.GODOT_VERSION }}-editor-${{ runner.os }}
+
+      - name: Cache export templates
+        uses: actions/cache@v4
+        with:
+          path: build-tools/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-templates-${{ runner.os }}
+
+      - name: Download Godot editor + export templates (cache miss)
+        run: |
+          set -euo pipefail
+          mkdir -p build-tools/godot
+          GODOT_BIN="build-tools/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          if [ ! -x "$GODOT_BIN" ]; then
+            curl -fsSL --retry 3 -o /tmp/godot-editor.zip \
+              "$GODOT_RELEASES/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -q /tmp/godot-editor.zip -d build-tools/godot
+            chmod +x "$GODOT_BIN"
+          fi
+          if [ -z "$(ls -A build-tools/export_templates 2>/dev/null)" ]; then
+            mkdir -p build-tools/export_templates
+            curl -fsSL --retry 3 -o /tmp/templates.tpz \
+              "$GODOT_RELEASES/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            mkdir -p build-tools/tp
+            unzip -q /tmp/templates.tpz -d build-tools/tp
+            cp -r build-tools/tp/templates/* build-tools/export_templates/
+          fi
+
+      - name: Stage templates where Godot expects them
+        run: |
+          tdir="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          if [ -z "$(ls -A "$tdir" 2>/dev/null)" ]; then
+            mkdir -p "$tdir"
+            cp -r build-tools/export_templates/* "$tdir/"
+          fi
+
+      - name: Prepare debug keystore
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          mkdir -p build-tools/ks
+          if [ -n "${KS_B64:-}" ]; then
+            echo "Using stored keystore (ANDROID_KEYSTORE_B64 secret)"
+            printf '%s' "$KS_B64" | base64 -d > build-tools/ks/roadpilot.keystore
+          else
+            echo "::notice::No ANDROID_KEYSTORE_B64 secret - generating ephemeral debug keystore"
+            echo "::notice::APK signature will change between runs: uninstall before reinstalling on the device"
+            keytool -genkeypair -v \
+              -keystore build-tools/ks/roadpilot.keystore \
+              -alias roadpilot -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass roadpilot -keypass roadpilot \
+              -dname "CN=RoadPilot CI, O=RoadPilot"
+          fi
+
+      - name: Import project + export Android APK
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_PATH: ${{ github.workspace }}/build-tools/ks/roadpilot.keystore
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: roadpilot
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: roadpilot
+        run: |
+          set -euo pipefail
+          mkdir -p build/android
+          GODOT_BIN="build-tools/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64"
+          "$GODOT_BIN" --headless --path . --import \
+            || echo "::warning::import exited non-zero; continuing"
+          "$GODOT_BIN" --headless --path . --export-debug "$PRESET_ANDROID" build/android/roadpilot.apk
+          if [ ! -f build/android/roadpilot.apk ]; then
+            echo "::error::APK missing after export"
+            exit 1
+          fi
+
+      - name: Write build-info.json
+        run: |
+          cat > build/android/build-info.json <<EOF
+          {
+            "project": "RoadPilot",
+            "version": "0.0.${GITHUB_RUN_NUMBER}",
+            "commit": "${GITHUB_SHA}",
+            "short_sha": "${SHORT_SHA}",
+            "branch": "${GITHUB_REF_NAME}",
+            "build_number": ${GITHUB_RUN_NUMBER},
+            "run_id": "${GITHUB_RUN_ID}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "godot_version": "${GODOT_VERSION}",
+            "target": "android-apk"
+          }
+          EOF
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadpilot-android-${{ env.SHORT_SHA }}-${{ github.run_number }}
+          path: build/android/
+          retention-days: 30
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roadpilot-android-logs-${{ env.SHORT_SHA }}-${{ github.run_number }}
+          path: "*.log"
+          retention-days: 7
+          if-no-files-found: ignore
