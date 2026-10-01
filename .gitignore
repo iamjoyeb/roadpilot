@@ -1,0 +1,12 @@
+# Godot 4
+.godot/
+export_credentials.cfg
+
+# CI / local build outputs
+build/
+build-tools/
+
+# OS / editor noise
+.DS_Store
+*.tmp
+*.log
