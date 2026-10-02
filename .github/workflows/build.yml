@@ -200,9 +200,11 @@ jobs:
           # Godot's Windows editor is a GUI-subsystem exe: `&` does NOT wait for it
           # and $LASTEXITCODE stays empty (first-run CI failure). Start-Process -Wait
           # gives a real wait + real exit code; -NoNewWindow keeps logs attached.
+          # NOTE: -ArgumentList does NOT quote elements - the preset name contains a
+          # space and must be passed with embedded quotes (second-run CI failure).
           $import = Start-Process -FilePath $exe -ArgumentList "--headless","--path",".","--import" -Wait -PassThru -NoNewWindow
           if ($import.ExitCode -ne 0) { Write-Host "::warning::import exited $($import.ExitCode) (continuing)" }
-          $export = Start-Process -FilePath $exe -ArgumentList "--headless","--path",".","--export-release","$env:PRESET_WINDOWS","build/windows/RoadPilot.exe" -Wait -PassThru -NoNewWindow
+          $export = Start-Process -FilePath $exe -ArgumentList "--headless","--path",".","--export-release","`"$env:PRESET_WINDOWS`"","build/windows/RoadPilot.exe" -Wait -PassThru -NoNewWindow
           if ($export.ExitCode -ne 0) { throw "Godot Windows export failed (exit $($export.ExitCode))" }
           if (-not (Test-Path build/windows/RoadPilot.exe)) { throw "RoadPilot.exe missing after export" }
           if (-not (Test-Path build/windows/RoadPilot.pck)) { Write-Host "::warning::RoadPilot.pck not found (check export mode)" }

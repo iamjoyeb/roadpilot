@@ -98,7 +98,7 @@ While the repository is docs-only (or partially scaffolded), the workflow stays 
 
 1. Checkout.
 2. Install pinned Godot 4.7.2 **Windows** editor binary (cached) + matching **export templates** (cached per OS, staged into `%APPDATA%\Godot\export_templates\4.7.2.stable\`).
-3. Run Godot in headless mode: `--import`, then export the preset named **`Windows Desktop`** → `build/windows/RoadPilot.exe`. Two runner-specific safeguards (both found in first-run CI): the job creates `build/windows/` first (**Godot fails if the export target's parent directory is missing**), and Godot is invoked via **`Start-Process -Wait -PassThru`** because the Windows editor is a GUI-subsystem exe (`&` does not wait for it and leaves `$LASTEXITCODE` empty).
+3. Run Godot in headless mode: `--import`, then export the preset named **`Windows Desktop`** → `build/windows/RoadPilot.exe`. Three runner-specific safeguards (found in runs 1–2 of CI): the job creates `build/windows/` first (**Godot fails if the export target's parent directory is missing**); Godot is invoked via **`Start-Process -Wait -PassThru`** because the Windows editor is a GUI-subsystem exe (`&` does not wait for it and leaves `$LASTEXITCODE` empty); and the preset name is passed **with embedded quotes** in `-ArgumentList` (Start-Process does not quote elements — an unquoted `Windows Desktop` was parsed as preset `Windows`).
 4. Verify outputs exist (executable + `*.pck`, expected directory structure).
 5. Generate `build-info.json` (§5) inside `build/windows/`.
 6. Proceed to Stage 3 in the same job.
@@ -125,7 +125,7 @@ Export presets exist (`export_presets.cfg`, scaffolded 2026-10-01; preset names 
 6. Verify APK exists; generate `build-info.json`.
 7. **No custom Gradle build** in MVP (TECH_STACK §12) — uses prebuilt templates only. No release/store signing (OQ5: personal project, no publishing).
 
-ABI/min-SDK belong to the export preset (OQ2 resolved: `arm64-v8a`, min API 24 — recorded in PRD §16); the workflow itself is ABI-agnostic.
+ABI/min-SDK belong to the export preset (OQ2 resolved: `arm64-v8a`, min API 24 — recorded in PRD §16); the workflow itself is ABI-agnostic. The project setting `rendering/textures/vram_compression/import_etc2_astc=true` (in `project.godot`) is a **hard precondition** for Android export — Godot refuses to export without it.
 
 ## 4. Artifact naming and retention
 
@@ -207,7 +207,12 @@ The workflow (`.github/workflows/build.yml`) contains every stage with **guards*
 1. **Windows** — `& $exe` on the GUI-subsystem Godot exe returned without waiting (`$LASTEXITCODE` empty → false export failure). Fixed: `Start-Process -Wait -PassThru` + `.ExitCode` (parse-checked with PowerShell 7.4 locally).
 2. **Android** — `android-actions/setup-android@v3` failed on `sdkmanager tools` (removed package). Fixed: action dropped; the preinstalled runner SDK is used directly (path resolution mock-tested for both `latest/` and versioned `cmdline-tools` layouts).
 
-Still to validate on the next run: WiX harvest/install layout (Windows runner), Android export end-to-end (SDK now supplied), template downloads from the runner network.
+**Second CI run (run `37007644588`):** both mechanisms fixed (real exit codes, proper log sequencing); two deeper errors surfaced and were fixed:
+
+3. **Windows** — `-ArgumentList` does not quote elements: `Windows Desktop` reached Godot as preset `Windows` (invalid). Fixed: embedded quotes around the preset argument.
+4. **Android** — Godot rejected the export: `ETC2/ASTC texture compression is required`. Fixed: `textures/vram_compression/import_etc2_astc=true` added to `project.godot` (setting key verified against the 4.7.2 binary).
+
+Still to validate on the next run: WiX harvest/install layout (Windows runner), full Android export end-to-end (ETC2 was the last config error listed), templates/keystore steps green in sequence.
 
 ## 9. Optional future: release workflow
 
