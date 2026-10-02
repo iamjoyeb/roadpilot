@@ -4,7 +4,7 @@ A lightweight 3D bus-driving simulator with **Auto Drive** — an AI driver that
 
 ## Current status
 
-**Scaffold phase — planning complete.** The repository contains full documentation ([`docs/`](docs/)), the MIT license, the CI pipeline (`.github/workflows/build.yml`), and a Godot **4.7.2** scaffold that has been validated locally: `project.godot` (input map, main scene), `export_presets.cfg` (Windows x64 + Android arm64), and a boot scene (`src/core/`). The Windows/Android build jobs **activate on the next push to `main`** (before that they skip with an explanation in the job summary — see [`docs/CI_CD.md`](docs/CI_CD.md)). No gameplay logic or assets yet.
+**Planning complete, scaffold + CI live.** The repository contains full documentation ([`docs/`](docs/)), the MIT license, a Godot **4.7.2** scaffold (`project.godot`, `export_presets.cfg`, boot scene `src/core/`), and a **green CI pipeline**: every push to `main` lints, runs headless checks, and produces retained **Windows folder (≈39 MB), MSI (≈31 MB), and Android APK (≈28 MB)** artifacts named with commit SHA + run number (see [`docs/CI_CD.md`](docs/CI_CD.md) for the bring-up log). Next phase: gameplay (M1 — world + vehicle), then GUT tests (CI's test stage activates when `tests/` lands).
 
 ## Vision
 

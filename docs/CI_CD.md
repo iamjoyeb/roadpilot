@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | RoadPilot |
-| Status | **Live pipeline:** workflow (`.github/workflows/build.yml`) + Godot scaffold (`project.godot`, `export_presets.cfg`) both present (2026-10-01). Preflight (§3.0) reports readiness; build jobs activate on the next push to `main` |
+| Status | **Live and green** — all four stages pass on `main` (first fully green run: `37008619949`, 2026-10-02; MSI content fixed in `37009320259`). Every push produces retained Windows folder, MSI, and Android APK artifacts (§4) |
 | Last updated | 2026-10-01 |
 | Related | [DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md), [TECH_STACK.md](TECH_STACK.md), [TESTING.md](TESTING.md) |
 
@@ -189,15 +189,15 @@ Not cached in v1 (installs are fast; add later if they show up in run time): gdt
 
 Concurrency: a `concurrency` group per branch cancels superseded in-flight runs on rapid pushes to `main` (saves minutes; OQ1).
 
-## 8. Bring-up order (implementation phase)
+## 8. Bring-up order and CI run log
 
 The workflow (`.github/workflows/build.yml`) contains every stage with **guards** that skip missing prerequisites and say so in the preflight summary. Status:
 
 1. ~~**Step 1:** lint on push to `main`~~ — **done** (now linting the scaffolded `src/`; `gdlint` + `gdformat --check` pass locally with the pinned gdtoolkit 4.5.0).
 2. **Step 2:** activates when `tests/` + GUT (`addons/gut/`) exist.
 3. ~~**Step 3:** `project.godot` + `export_presets.cfg`~~ — **done** (scaffolded 2026-10-01); build jobs activate on the next push to `main`.
-4. **Step 4:** MSI packaging ships in the same job — first run validates WiX harvesting/layout (`.wxs` XML pre-validated locally; WiX itself runs only on the Windows runner).
-5. **Step 5:** Android export ships in the same job — first run validates SDK/API-level needs on the runner; optional `ANDROID_KEYSTORE_B64` secret adds signature stability.
+4. ~~**Step 4:** MSI packaging~~ — **done** (31.2 MB MSI in run 4; the run-3 empty harvest was found by artifact audit and fixed — see §3.3). Clean-machine install test remains manual (TESTING §9).
+5. ~~**Step 5:** Android export~~ — **done** (28.3 MB APK in run 4, debug keystore per OQ5). Device install test remains manual (TESTING §8).
 6. ~~**Step 6:** PR fast gates + `workflow_dispatch`~~ — **done** (PRs run lint/tests only; builds run on `main` pushes + manual dispatch).
 
 **Local pre-validation (2026-10-01, Linux, real Godot 4.7.2 editor):** headless `--import` clean; boot scene runs; **Windows export produces `RoadPilot.exe` + `RoadPilot.pck`**; Android preset passes config checks up to the SDK lookup (CI provides SDK); keystore env-var names verified against the binary; WiX `.wxs` well-formed.
@@ -212,9 +212,11 @@ The workflow (`.github/workflows/build.yml`) contains every stage with **guards*
 3. **Windows** — `-ArgumentList` does not quote elements: `Windows Desktop` reached Godot as preset `Windows` (invalid). Fixed: embedded quotes around the preset argument.
 4. **Android** — Godot rejected the export: `ETC2/ASTC texture compression is required`. Fixed: `textures/vram_compression/import_etc2_astc=true` added to `project.godot` (setting key verified against the 4.7.2 binary).
 
-Still to validate on the next run: WiX harvest/install layout (Windows runner), full Android export end-to-end (ETC2 was the last config error listed), templates/keystore steps green in sequence.
+Still to validate on the next run: WiX harvest/install layout (Windows runner), full Android export end-to-end (ETC2 was the last config error listed), templates/keystore steps green in sequence. *(Outcome: see runs 3–4 below.)*
 
 **Third CI run (run `37008619949`): all four jobs green — first fully green pipeline.** All three artifacts produced with correct `<shortsha>-<run>` naming and 30-day retention; `build-info.json` matches the §5 contract exactly; Android keystore notice emitted as designed. **Artifact content audit caught one silent defect:** the MSI was 28 KB (empty) because of the WiX `Files` relative-path gotcha (`WIX8601` only warns). Fixed: absolute harvest path + mandatory ≥1 MB MSI size guard (§3.3).
+
+**Fourth CI run (run `37009320259`, 2026-10-02): all green with content-verified artifacts** — Windows folder 38.9 MB, **MSI 31.2 MB** (guard passed, `WIX8601` gone), Android APK 28.3 MB. Pipeline bring-up is complete for stages 0–3; what remains is **manual validation** (clean-machine MSI install, Vivo device install — TESTING.md §8/§9) and **bring-up step 2** (GUT tests activate when `tests/` + `addons/gut/` land).
 
 ## 9. Optional future: release workflow
 

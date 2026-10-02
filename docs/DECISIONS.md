@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | RoadPilot |
-| Status | Draft — planning phase (initial decision set) |
+| Status | Active — planning complete; initial decision set (ADR-001…009) |
 | Last updated | 2026-10-01 |
 
 **Format:** each record uses Context / Decision / Alternatives / Reasoning / Consequences. Records are **append-only**: superseded decisions get a "Superseded by ADR-xxx" note; they are never silently rewritten.

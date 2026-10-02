@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | RoadPilot |
-| Status | Draft — planning phase |
+| Status | Active — planning complete (2026-10-01); living document |
 | Last updated | 2026-10-01 |
 | Engine | Godot 4.7.2 (GDScript) |
 | Related | [PRD.md](PRD.md), [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), [TECH_STACK.md](TECH_STACK.md), [DECISIONS.md](DECISIONS.md) |

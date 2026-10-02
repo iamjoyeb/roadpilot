@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | RoadPilot |
-| Status | Draft — planning phase |
+| Status | Active — planning complete (2026-10-01); living document |
 | Last updated | 2026-10-01 |
 | Related | [PRD.md](PRD.md), [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) |
 
@@ -36,9 +36,9 @@ All features are `Not started` at the time of writing (documentation-only phase)
 | **Minimal HUD** | Speed (km/h), control mode, route progress, completion notice | P0 | Snapshots, events | S | PRD UR1–UR3; readable at 1366×768 | Not started |
 | **Settings (basic)** | Graphics preset low/medium + persistence with defaults fallback | P0 | Config module | S | PRD UR4, SC1–SC2; survives restart | Not started |
 | **Start menu (minimal)** | First screen with a start action → driving scene (PRD UR5) | P0 | UI module | S | Launching enters the driving scene; works on Windows + Android | Not started |
-| **CI pipeline** | Push-to-main: lint, headless tests, Windows+MSI, Android APK, SHA metadata (`.github/workflows/build.yml` exists) | P0 | Repo, export presets | M | CI_CD.md; PRD AC9–AC12 | **In progress** — workflow + scaffold in place; first green run pending on push to `main` |
-| **MSI installer** | WiX MSI from Windows export (step present in workflow) | P0 | Windows export | M | Installs/runs on a non-dev Windows machine (AC1) | **In progress** — pending first green run |
-| **Android APK build** | Godot Android export on Linux runner, debug-signed (step present in workflow) | P0 | Export presets, SDK on runner | M | APK installs/boots on test device (AC10) | **In progress** — pending first green run |
+| **CI pipeline** | Push-to-main: lint, headless tests, Windows+MSI, Android APK, SHA metadata (`.github/workflows/build.yml` exists) | P0 | Repo, export presets | M | CI_CD.md; PRD AC9–AC12 | **Done** — all four stages green on every push (runs 3–4); GUT stage activates when `tests/` lands (AC11/AC12) |
+| **MSI installer** | WiX MSI from Windows export (step present in workflow) | P0 | Windows export | M | Installs/runs on a non-dev Windows machine (AC1) | **In progress** — 31 MB MSI built by CI (run 4); clean-machine install test pending (TESTING §9) |
+| **Android APK build** | Godot Android export on Linux runner, debug-signed (step present in workflow) | P0 | Export presets, SDK on runner | M | APK installs/boots on test device (AC10) | **In progress** — 28 MB APK built by CI (run 4); Vivo install test pending (TESTING §8) |
 
 ### 1.2 Post-MVP (P1)
 

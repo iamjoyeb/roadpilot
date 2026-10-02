@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Project | RoadPilot |
-| Status | Draft — planning phase |
+| Status | Active — planning complete (2026-10-01); living document |
 | Last updated | 2026-10-01 |
 | Related | [PRD.md](PRD.md), [FEATURES.md](FEATURES.md), [CI_CD.md](CI_CD.md), [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md) |
 
