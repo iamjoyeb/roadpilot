@@ -108,9 +108,9 @@ Export presets exist (`export_presets.cfg`, scaffolded 2026-10-01; preset names 
 ### 3.3 Stage 3 — MSI packaging (same Windows job)
 
 1. Install **WiX Toolset 5.0.2** (`dotnet tool install --global wix --version 5.0.2`).
-2. Generate a compact `.wxs` (in the workflow) and compile the MSI. Harvesting uses the WiX v5 **`<Files Include="build\windows\**" />`** element (built-in directory harvesting — no Heat step). Requirement: **installable MSI that places a working build under `Program Files\RoadPilot` on a clean Windows machine.**
+2. Generate a compact `.wxs` (in the workflow) and compile the MSI. Harvesting uses the WiX v5 **`<Files Include="…\build\windows\**" />`** element (built-in directory harvesting — no Heat step). **Path gotcha (run 3):** `<Files>` resolves its `Include` **relative to the `.wxs` file's directory** (`build/installer/`), not the repo root — a relative `build\windows\**` harvested nothing (`WIX8601` warning, exit 0, empty 28 KB MSI). The workflow therefore passes an **absolute** `$env:GITHUB_WORKSPACE\build\windows\**` path. Requirement: **installable MSI that places a working build under `Program Files\RoadPilot` on a clean Windows machine.**
 3. Version: **`0.0.<run_number>`** (build-number versioning per OQ6 — not a release version). Stable `UpgradeCode` constant lives in the workflow (product identity across builds). `build-info.json` sits next to and inside the MSI payload.
-4. Smoke validation on the runner: MSI file exists and is non-trivial in size (full install test happens manually per TESTING.md).
+4. Smoke validation on the runner: MSI file exists and is **at least 1 MB** — enforced by a size guard in the workflow (`WIX8601` empty harvests only warn, so exit codes are not enough; full install test happens manually per TESTING.md).
 5. First-run validation note: the harvested install layout (prefix stripping of `build\windows\`) is verified on the first green Windows run and adjusted in the workflow if needed.
 
 **Note:** no Windows code signing (OQ4 resolved: none). Expect SmartScreen warnings — acceptable for personal use.
@@ -213,6 +213,8 @@ The workflow (`.github/workflows/build.yml`) contains every stage with **guards*
 4. **Android** — Godot rejected the export: `ETC2/ASTC texture compression is required`. Fixed: `textures/vram_compression/import_etc2_astc=true` added to `project.godot` (setting key verified against the 4.7.2 binary).
 
 Still to validate on the next run: WiX harvest/install layout (Windows runner), full Android export end-to-end (ETC2 was the last config error listed), templates/keystore steps green in sequence.
+
+**Third CI run (run `37008619949`): all four jobs green — first fully green pipeline.** All three artifacts produced with correct `<shortsha>-<run>` naming and 30-day retention; `build-info.json` matches the §5 contract exactly; Android keystore notice emitted as designed. **Artifact content audit caught one silent defect:** the MSI was 28 KB (empty) because of the WiX `Files` relative-path gotcha (`WIX8601` only warns). Fixed: absolute harvest path + mandatory ≥1 MB MSI size guard (§3.3).
 
 ## 9. Optional future: release workflow
 

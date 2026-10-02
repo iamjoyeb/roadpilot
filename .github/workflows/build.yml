@@ -236,6 +236,9 @@ jobs:
           # UpgradeCode is the stable product identity of RoadPilot MSIs (do not change).
           $upgradeCode = "9F4E7A2B-1C58-4D3E-B6A0-7E2D9C3F5A18"
           $version = "0.0.$env:GITHUB_RUN_NUMBER"
+          # <Files> paths resolve relative to the .wxs file's directory (build/installer/),
+          # so use an absolute path (WIX8601 empty-harvest trap, run 3).
+          $harvest = "$env:GITHUB_WORKSPACE\build\windows\**"
           $wxs = @"
           <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
             <Package Name="RoadPilot" Version="$version" Manufacturer="RoadPilot"
@@ -250,7 +253,7 @@ jobs:
             </Package>
             <Fragment>
               <ComponentGroup Id="RoadPilotFiles" Directory="INSTALLFOLDER">
-                <Files Include="build\windows\**" />
+                <Files Include="$harvest" />
               </ComponentGroup>
             </Fragment>
           </Wix>
@@ -260,6 +263,9 @@ jobs:
           & $wix build build/installer/RoadPilot.wxs -o "build/installer/$msi" -arch x64
           if ($LASTEXITCODE -ne 0) { throw "wix build failed (exit $LASTEXITCODE)" }
           if (-not (Test-Path "build/installer/$msi")) { throw "MSI missing after wix build" }
+          # Empty-harvest guard (CI_CD 3.3): a WIX8601 warning still yields exit 0 and a ~28 KB empty MSI.
+          $msiSize = (Get-Item "build/installer/$msi").Length
+          if ($msiSize -lt 1MB) { throw "MSI is only $msiSize bytes - file harvesting failed (check WIX8601)" }
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
