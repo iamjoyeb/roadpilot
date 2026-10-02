@@ -196,11 +196,14 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force build/windows | Out-Null
-          $exe = "build-tools\godot\Godot_v$env:GODOT_VERSION-stable_win64.exe"
-          & $exe --headless --path . --import
-          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::import exited $LASTEXITCODE (continuing)" }
-          & $exe --headless --path . --export-release "$env:PRESET_WINDOWS" build/windows/RoadPilot.exe
-          if ($LASTEXITCODE -ne 0) { throw "Godot Windows export failed (exit $LASTEXITCODE)" }
+          $exe = (Resolve-Path "build-tools\godot\Godot_v$env:GODOT_VERSION-stable_win64.exe").Path
+          # Godot's Windows editor is a GUI-subsystem exe: `&` does NOT wait for it
+          # and $LASTEXITCODE stays empty (first-run CI failure). Start-Process -Wait
+          # gives a real wait + real exit code; -NoNewWindow keeps logs attached.
+          $import = Start-Process -FilePath $exe -ArgumentList "--headless","--path",".","--import" -Wait -PassThru -NoNewWindow
+          if ($import.ExitCode -ne 0) { Write-Host "::warning::import exited $($import.ExitCode) (continuing)" }
+          $export = Start-Process -FilePath $exe -ArgumentList "--headless","--path",".","--export-release","$env:PRESET_WINDOWS","build/windows/RoadPilot.exe" -Wait -PassThru -NoNewWindow
+          if ($export.ExitCode -ne 0) { throw "Godot Windows export failed (exit $($export.ExitCode))" }
           if (-not (Test-Path build/windows/RoadPilot.exe)) { throw "RoadPilot.exe missing after export" }
           if (-not (Test-Path build/windows/RoadPilot.pck)) { Write-Host "::warning::RoadPilot.pck not found (check export mode)" }
 
@@ -296,17 +299,30 @@ jobs:
       - name: Build identity
         run: echo "SHORT_SHA=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: android-actions/setup-android@v3
-
+      # The Android SDK is preinstalled on GitHub's Ubuntu runner images
+      # (ANDROID_HOME points at it) - no third-party setup action needed.
+      # android-actions/setup-android@v3 was dropped after it failed on
+      # `sdkmanager tools`, a package Google removed from the repositories.
       - name: Install Android SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager "platform-tools" \
+          set -euo pipefail
+          sdk_root="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            sdkmanager="$(find "$sdk_root/cmdline-tools" -maxdepth 3 -type f -name sdkmanager -path '*/bin/*' | head -n 1)"
+          fi
+          if [ -z "${sdkmanager:-}" ] || [ ! -x "$sdkmanager" ]; then
+            echo "::error::sdkmanager not found under $sdk_root (runner image changed?)"
+            exit 1
+          fi
+          echo "Using sdkmanager: $sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$sdkmanager" "platform-tools" \
             "platforms;android-34" "build-tools;34.0.0" \
             "platforms;android-35" "build-tools;35.0.0"
 

@@ -98,7 +98,7 @@ While the repository is docs-only (or partially scaffolded), the workflow stays 
 
 1. Checkout.
 2. Install pinned Godot 4.7.2 **Windows** editor binary (cached) + matching **export templates** (cached per OS, staged into `%APPDATA%\Godot\export_templates\4.7.2.stable\`).
-3. Run Godot in headless mode: `--import`, then export the preset named **`Windows Desktop`** → `build/windows/RoadPilot.exe`. The job creates `build/windows/` first — **Godot fails if the export target's parent directory is missing** (caught in local pre-validation, 2026-10-01).
+3. Run Godot in headless mode: `--import`, then export the preset named **`Windows Desktop`** → `build/windows/RoadPilot.exe`. Two runner-specific safeguards (both found in first-run CI): the job creates `build/windows/` first (**Godot fails if the export target's parent directory is missing**), and Godot is invoked via **`Start-Process -Wait -PassThru`** because the Windows editor is a GUI-subsystem exe (`&` does not wait for it and leaves `$LASTEXITCODE` empty).
 4. Verify outputs exist (executable + `*.pck`, expected directory structure).
 5. Generate `build-info.json` (§5) inside `build/windows/`.
 6. Proceed to Stage 3 in the same job.
@@ -118,7 +118,7 @@ Export presets exist (`export_presets.cfg`, scaffolded 2026-10-01; preset names 
 ### 3.4 Stage 2B — Android build (ubuntu-latest)
 
 1. Checkout.
-2. Setup **JDK 17** (Temurin) and **Android SDK** (`android-actions/setup-android`); install `platform-tools`, Android platforms 34/35 + matching build-tools (adjust to Godot's target API on first run).
+2. Setup **JDK 17** (Temurin). The Android SDK is **preinstalled on GitHub's Ubuntu runner images** (`ANDROID_HOME`): the job accepts licenses and installs `platform-tools`, platforms 34/35 + matching build-tools using the image's `cmdline-tools/latest` `sdkmanager` (adjust to Godot's target API if needed). `android-actions/setup-android` was **removed** after first-run CI showed it failing on `sdkmanager tools` — a package Google removed from the repositories.
 3. Install pinned Godot 4.7.2 Linux editor + export templates (same cache keys as the other jobs).
 4. **Debug keystore (OQ5 resolved: debug-only):** use the optional `ANDROID_KEYSTORE_B64` GitHub secret if present (alias `roadpilot`, store/key password `roadpilot` — keeps the APK signature stable across runs); otherwise the workflow generates an ephemeral keystore with `keytool` and prints a notice that the device requires uninstall-before-reinstall when the signature changes.
 5. Headless export: `--import`, then `--export-debug "Android"` → `build/android/roadpilot.apk` (the job creates `build/android/` first — same parent-directory rule as §3.2), with keystore settings injected via `GODOT_ANDROID_KEYSTORE_DEBUG_PATH/_USER/_PASSWORD` env vars (no credentials committed in `export_presets.cfg`; env-var names verified against the Godot 4.7.2 binary).
@@ -200,7 +200,14 @@ The workflow (`.github/workflows/build.yml`) contains every stage with **guards*
 5. **Step 5:** Android export ships in the same job — first run validates SDK/API-level needs on the runner; optional `ANDROID_KEYSTORE_B64` secret adds signature stability.
 6. ~~**Step 6:** PR fast gates + `workflow_dispatch`~~ — **done** (PRs run lint/tests only; builds run on `main` pushes + manual dispatch).
 
-**Local pre-validation (2026-10-01, Linux, real Godot 4.7.2 editor):** headless `--import` clean; boot scene runs; **Windows export produces `RoadPilot.exe` + `RoadPilot.pck`**; Android preset passes config checks up to the SDK lookup (CI provides SDK); keystore env-var names verified against the binary; WiX `.wxs` well-formed. Remaining first-run checks on GitHub runners: template download, WiX harvest layout, Android SDK/API levels.
+**Local pre-validation (2026-10-01, Linux, real Godot 4.7.2 editor):** headless `--import` clean; boot scene runs; **Windows export produces `RoadPilot.exe` + `RoadPilot.pck`**; Android preset passes config checks up to the SDK lookup (CI provides SDK); keystore env-var names verified against the binary; WiX `.wxs` well-formed.
+
+**First CI run (2026-10-01, run `36868939265`):** preflight ✅, lint & tests ✅; two runner-only failures, both fixed immediately:
+
+1. **Windows** — `& $exe` on the GUI-subsystem Godot exe returned without waiting (`$LASTEXITCODE` empty → false export failure). Fixed: `Start-Process -Wait -PassThru` + `.ExitCode` (parse-checked with PowerShell 7.4 locally).
+2. **Android** — `android-actions/setup-android@v3` failed on `sdkmanager tools` (removed package). Fixed: action dropped; the preinstalled runner SDK is used directly (path resolution mock-tested for both `latest/` and versioned `cmdline-tools` layouts).
+
+Still to validate on the next run: WiX harvest/install layout (Windows runner), Android export end-to-end (SDK now supplied), template downloads from the runner network.
 
 ## 9. Optional future: release workflow
 
